@@ -7,7 +7,7 @@ require "http/response/parser"
 
 module HTTP
   # A connection to the HTTP server
-  class Connection
+  class Connection # rubocop:disable Metrics/ClassLength
     extend Forwardable
 
     # Allowed values for CONNECTION header
@@ -129,9 +129,18 @@ module HTTP
     end
 
     # Whether we're keeping the conn alive
+    #
+    # An idle connection also needs the peer to still be there: a proxy or
+    # server that closed it while idle leaves the fd open, the kernel accepts
+    # the next write, and the failure only shows up as "couldn't read response
+    # headers". While a response is pending, its unread body is expected data,
+    # so sending on top of it still raises StateError.
+    #
     # @return [Boolean]
     def keep_alive?
-      !!@keep_alive && !@socket.closed?
+      return !!@keep_alive && !@socket.closed? if @pending_response
+
+      !!@keep_alive && !@socket.closed? && peer_open?
     end
 
     # Whether our connection has expired
@@ -141,6 +150,19 @@ module HTTP
     end
 
     private
+
+    # Only an empty receive queue means the peer is still there. EOF ("" on
+    # Ruby 2.7, nil on 3.3+) is its FIN, and stray bytes cost one reconnect,
+    # as in libcurl. Not wait_readable + eof?: OpenSSL::Buffering#eof? can
+    # block in sysread.
+    # @return [Boolean]
+    def peer_open?
+      io = @socket.socket
+      io = io.to_io if io.respond_to?(:to_io)
+      io.recv_nonblock(1, Socket::MSG_PEEK, :exception => false) == :wait_readable
+    rescue IOError, SystemCallError
+      false
+    end
 
     # Sets up SSL context and starts TLS if needed.
     # @param (see #initialize)

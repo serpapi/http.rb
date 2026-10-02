@@ -162,10 +162,7 @@ RSpec.shared_context "HTTP handling" do
           DummyServer::Servlet.sockets.clear
           # rubocop:enable Style/RescueModifier
 
-          # Should error because we tried to use a bad socket
-          expect { client.get("#{server.endpoint}/socket").body.to_s }.to raise_error HTTP::ConnectionError
-
-          # Should succeed since we create a new socket
+          # The server closed the idle socket, so the client opens a new one
           second_socket_id = client.get("#{server.endpoint}/socket").body.to_s
           expect(second_socket_id).to_not eq(first_socket_id)
         end
