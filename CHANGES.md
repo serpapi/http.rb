@@ -1,3 +1,15 @@
+## 4.4.1 serpapi (unreleased)
+
+Fork of v4.4.1 for Ruby 2.7, used by SerpApi until it can upgrade.
+
+* Don't reuse a persistent connection the server already closed: a
+  non-blocking `MSG_PEEK` before reuse reconnects instead of failing with
+  "couldn't read response headers".
+* Send an idempotent request once more on a new connection when the
+  connection dies before any response byte. `:idempotent => true` marks a
+  POST as safe to resend. `HTTP::Feature#on_resend(request, error, elapsed)`
+  reports each resend.
+
 ## 4.4.1 (2020-03-29)
 
 * Backport [#590](https://github.com/httprb/http/pull/590)

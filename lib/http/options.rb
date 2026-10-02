@@ -141,6 +141,10 @@ module HTTP
 
     def_option :persistent, :reader_only => true
 
+    # A non-idempotent request the caller knows is safe to send twice, like a
+    # read-only RPC over POST: HTTP.persistent(host).post(path, :idempotent => true)
+    def_option :idempotent
+
     def persistent=(value)
       @persistent = value ? HTTP::URI.parse(value).origin : nil
     end

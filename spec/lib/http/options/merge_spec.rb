@@ -51,6 +51,7 @@ RSpec.describe HTTP::Options, "merge" do
       :body               => "body-bar",
       :json               => {:bar => "bar"},
       :persistent         => "https://www.googe.com",
+      :idempotent         => nil,
       :keep_alive_timeout => 10,
       :ssl                => {:foo => "bar"},
       :headers            => {"Foo" => "foo", "Accept" => "xml", "Bar" => "bar"},
