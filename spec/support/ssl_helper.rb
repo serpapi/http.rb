@@ -2,24 +2,44 @@
 
 require "pathname"
 
-require "certificate_authority"
+require "openssl"
 
+# Version 3 certificates that current OpenSSL accepts, valid from an hour ago
+# in UTC so local time zones can't make them "not yet valid".
 module SSLHelper
   CERTS_PATH = Pathname.new File.expand_path("../../../tmp/certs", __FILE__)
 
-  class RootCertificate < ::CertificateAuthority::Certificate
-    EXTENSIONS = {"keyUsage" => {"usage" => %w[critical keyCertSign]}}.freeze
+  module Signing
+    def build(subject, issuer, key, issuer_key, serial)
+      cert            = OpenSSL::X509::Certificate.new
+      cert.version    = 2
+      cert.serial     = serial
+      cert.subject    = OpenSSL::X509::Name.parse(subject)
+      cert.issuer     = issuer || cert.subject
+      cert.public_key = key.public_key
+      cert.not_before = Time.now.utc - 3600
+      cert.not_after  = Time.now.utc + 86_400
+
+      extensions = OpenSSL::X509::ExtensionFactory.new
+      extensions.subject_certificate = cert
+      extensions.issuer_certificate  = @issuer_cert || cert
+      yield cert, extensions
+      cert.sign(issuer_key, OpenSSL::Digest.new("SHA256"))
+    end
+  end
+
+  class RootCertificate
+    include Signing
+
+    attr_reader :cert, :key
 
     def initialize
-      super()
-
-      subject.common_name  = "honestachmed.com"
-      serial_number.number = 1
-      key_material.generate_key
-
-      self.signing_entity = true
-
-      sign!("extensions" => EXTENSIONS)
+      @key  = OpenSSL::PKey::RSA.new(2048)
+      @cert = build("/CN=honestachmed.com", nil, @key, @key, 1) do |cert, ext|
+        cert.add_extension ext.create_extension("basicConstraints", "CA:TRUE", true)
+        cert.add_extension ext.create_extension("keyUsage", "keyCertSign,cRLSign", true)
+        cert.add_extension ext.create_extension("subjectKeyIdentifier", "hash")
+      end
     end
 
     def file
@@ -28,32 +48,26 @@ module SSLHelper
       CERTS_PATH.mkpath
 
       cert_file = CERTS_PATH.join("ca.crt")
-      cert_file.open("w") { |io| io << to_pem }
+      cert_file.open("w") { |io| io << cert.to_pem }
 
       @file = cert_file.to_s
     end
   end
 
-  class ChildCertificate < ::CertificateAuthority::Certificate
+  class ChildCertificate
+    include Signing
+
+    attr_reader :cert, :key
+
     def initialize(parent)
-      super()
-
-      subject.common_name  = "127.0.0.1"
-      serial_number.number = 1
-
-      key_material.generate_key
-
-      self.parent = parent
-
-      sign!
-    end
-
-    def cert
-      OpenSSL::X509::Certificate.new to_pem
-    end
-
-    def key
-      OpenSSL::PKey::RSA.new key_material.private_key.to_pem
+      @issuer_cert = parent.cert
+      @key  = OpenSSL::PKey::RSA.new(2048)
+      @cert = build("/CN=127.0.0.1", parent.cert.subject, @key, parent.key, Random.rand(1 << 64)) do |cert, ext|
+        cert.add_extension ext.create_extension("basicConstraints", "CA:FALSE", true)
+        cert.add_extension ext.create_extension("keyUsage", "digitalSignature,keyEncipherment", true)
+        cert.add_extension ext.create_extension("subjectAltName", "IP:127.0.0.1")
+        cert.add_extension ext.create_extension("authorityKeyIdentifier", "keyid:always")
+      end
     end
   end
 

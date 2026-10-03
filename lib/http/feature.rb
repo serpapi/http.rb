@@ -13,6 +13,10 @@ module HTTP
     def wrap_response(response)
       response
     end
+
+    # Called before Client#perform sends a request once more on a new
+    # connection, with the error and seconds spent on the failed attempt.
+    def on_resend(_request, _error, _elapsed); end
   end
 end
 

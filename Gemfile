@@ -17,8 +17,6 @@ group :development do
 end
 
 group :test do
-  gem "activemodel", :require => false # Used by certificate_authority
-  gem "certificate_authority", :require => false
 
   gem "backports"
 

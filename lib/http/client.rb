@@ -12,7 +12,7 @@ require "http/uri"
 
 module HTTP
   # Clients make requests and receive responses
-  class Client
+  class Client # rubocop:disable Metrics/ClassLength
     extend Forwardable
     include Chainable
 
@@ -21,6 +21,7 @@ module HTTP
     def initialize(default_options = {})
       @default_options = HTTP::Options.new(default_options)
       @connection = nil
+      @reused_connection = false
       @state = :clean
     end
 
@@ -60,8 +61,36 @@ module HTTP
     #   @return [Boolean] whenever client is persistent
     def_delegator :default_options, :persistent?
 
+    # Verbs that are safe to send twice (RFC 9110, Section 9.2.2)
+    IDEMPOTENT_VERBS = %i[get head put delete options trace].freeze
+
     # Perform a single (no follow) HTTP request
+    #
+    # The liveness check in Connection#keep_alive? can't see a close that
+    # crosses the request on the wire, or a proxy cutting a tunnel while the
+    # origin is still answering. Such a request goes out once more on a new
+    # connection, but only when sending it twice is safe. The resend's own
+    # failure is final.
     def perform(req, options)
+      started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      perform_once(req, options)
+    rescue ConnectionError => e
+      raise unless resend?(req, options, e)
+
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+      options.features.each_value { |feature| feature.on_resend(req, e, elapsed) }
+      perform_once(req, options)
+    end
+
+    def close
+      @connection.close if @connection
+      @connection = nil
+      @state = :clean
+    end
+
+    private
+
+    def perform_once(req, options)
       verify_connection!(req.uri)
 
       @state = :dirty
@@ -96,13 +125,19 @@ module HTTP
       raise
     end
 
-    def close
-      @connection.close if @connection
-      @connection = nil
-      @state = :clean
-    end
+    # EOF before any response byte counts on any connection. A reset counts
+    # only on a connection that had already served a response, as in Go
+    # (isReused) and Chromium (IsConnectionReused): on a fresh one it's the
+    # answer. An IO body is rewound only after all of it was written, and
+    # never a pipe, so only nil and String bodies go again.
+    def resend?(req, options, error)
+      return false unless options.persistent?
+      return false unless IDEMPOTENT_VERBS.include?(req.verb) || options.idempotent
+      return false unless req.body.source.nil? || req.body.source.is_a?(String)
 
-    private
+      error.message == "couldn't read response headers" ||
+        (@reused_connection && error.cause.is_a?(Errno::ECONNRESET))
+    end
 
     def wrap_request(req, opts)
       opts.features.inject(req) do |request, (_name, feature)|
@@ -123,6 +158,8 @@ module HTTP
       elsif @state == :dirty
         close
       end
+
+      @reused_connection = !@connection.nil?
     end
 
     # Merges query params if needed
